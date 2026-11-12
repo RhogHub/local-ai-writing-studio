@@ -1,0 +1,67 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: writing-studio-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-10m}
+    # The model API stays internal to the Compose network (no host port).
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  api:
+    build:
+      context: ./backend
+    container_name: writing-studio-api
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_PATH: ${DATABASE_PATH:-/app/data/writing-studio.sqlite}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:9b}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-32768}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      MAX_INPUT_CHARS: ${MAX_INPUT_CHARS:-30000}
+      PROMPTS_DIR: /app/prompts
+    ports:
+      - "127.0.0.1:${API_PORT:-3000}:3000"
+    volumes:
+      - ./data:/app/data
+      - ./backend/prompts:/app/prompts:ro
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: writing-studio-frontend
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
